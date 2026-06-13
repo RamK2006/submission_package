@@ -1,0 +1,361 @@
+GridLock Traffic Demand Prediction - Approach Details
+
+Objective
+The task was to predict the demand value for each row in test.csv and submit the result in the same format as sample_submission.csv, with columns:
+
+Index,demand
+
+I prepared the final prediction file as predictions.csv. The final submitted source code notebook is GridLock_train_only_submission.ipynb.
+
+
+Data Used
+Only the following files were used for model training and prediction:
+
+1. train.csv
+   - Used as the only labeled training dataset.
+   - Contains demand values.
+
+2. test.csv
+   - Used only for generating final predictions.
+   - Does not contain demand values.
+
+3. sample_submission.csv
+   - Used only to verify the required submission format.
+
+Important note:
+training.csv was not used in the modeling notebook or final train-only prediction pipeline.
+
+
+Data Cleaning
+The data cleaning steps included:
+
+1. Standardized categorical text fields
+   - geohash
+   - timestamp
+   - RoadType
+   - LargeVehicles
+   - Landmarks
+   - Weather
+
+2. Handled missing categorical values
+   Missing categorical values were replaced with the category "Missing" so that the models could learn from missingness patterns.
+
+3. Handled missing numerical values
+   Temperature missingness was explicitly captured using a binary missing indicator.
+   Remaining missing numerical values were filled using median values learned from the training split.
+
+4. Clipped predictions
+   Final model predictions were clipped to the range [0, 1], because demand is bounded in that range.
+
+
+Feature Engineering
+The feature engineering was designed to extract information from time, geography, road conditions, weather, missingness, and historical train-only patterns.
+
+1. Time features
+The timestamp column was converted into minutes from midnight. From this, the following features were created:
+
+- timestamp_minutes
+- hour
+- minute
+- 15-minute slot index
+- is_peak_commute
+- is_late_night
+- is_business_hour
+
+Cyclic time features were also created so that the model understands that times wrap around over a day:
+
+- time_sin
+- time_cos
+- slot_sin
+- slot_cos
+
+2. Day features
+The day column was used to create:
+
+- day
+- day_mod7
+- is_day49
+
+These features help the model understand day-level differences between training and prediction rows.
+
+3. Temperature features
+Temperature was used directly and also transformed:
+
+- Temperature
+- Temperature_missing
+- Temperature_clip
+- Temperature_sq
+- Temperature_x_hour
+
+These allow the model to capture nonlinear weather effects and the interaction between time of day and temperature.
+
+4. Road and traffic condition features
+The following direct and interaction features were used:
+
+- RoadType
+- NumberofLanes
+- LargeVehicles
+- Landmarks
+- Weather
+- large_allowed
+- has_landmark
+- lanes_x_hour
+- lanes_x_peak
+- road_lanes
+- weather_road
+
+These features help capture how road capacity, road type, vehicle restrictions, landmarks, and weather affect traffic demand.
+
+5. Missingness indicators
+Separate missing-value indicators were created for important columns:
+
+- Temperature_missing
+- RoadType_missing
+- LargeVehicles_missing
+- Landmarks_missing
+- Weather_missing
+
+This is useful because missing values may themselves carry signal in the dataset.
+
+6. Geohash features
+The geohash column was heavily engineered because location is one of the strongest predictors of demand.
+
+Features created from geohash:
+
+- geohash_prefix3
+- geohash_prefix4
+- geohash_prefix5
+- individual geohash character encodings
+- geohash integer representation
+- decoded latitude
+- decoded longitude
+- latitude error
+- longitude error
+- geo_lat_x_lon interaction
+
+These features allow the model to learn both exact location patterns and broader spatial region patterns.
+
+7. Frequency encoding
+Frequency and count encoding were applied to high-signal categorical fields such as:
+
+- geohash
+- geohash_prefix3
+- geohash_prefix4
+- geohash_prefix5
+- timestamp
+- RoadType
+- Weather
+- road_lanes
+
+Frequency encoding tells the model how common a location, time, or category is in the training data.
+
+8. Target encoding
+Out-of-fold target encoding was used for categorical and interaction features. This was done carefully to reduce leakage during validation.
+
+Target-encoded features included:
+
+- geohash
+- geohash_prefix3
+- geohash_prefix4
+- geohash_prefix5
+- timestamp
+- hour
+- slot
+- RoadType
+- Weather
+- LargeVehicles
+- Landmarks
+- road_lanes
+- weather_road
+- geo_time_key
+- prefix5_time_key
+- geo_hour_key
+- road_weather_time_key
+
+Smoothed target encoding was used so that rare categories do not overfit too strongly.
+
+9. Train-only lag features
+Since train.csv contains day 48 and part of day 49, legal lag features were created using only train.csv labels.
+
+Lag features included:
+
+- previous-day same geohash and timestamp demand
+- previous-day geohash mean demand
+- previous-day timestamp mean demand
+- previous-day geohash-hour mean demand
+- previous-day geohash-prefix5 and timestamp mean demand
+
+These features help the model learn repeated daily traffic patterns without using training.csv.
+
+
+Validation Strategy
+The validation split was designed to mimic a forward prediction setup.
+
+Training rows for tuning:
+- Day 48
+- Early day 49 rows before timestamp 1:30
+
+Validation rows:
+- Day 49 rows at timestamps 1:30, 1:45, and 2:00
+
+This validation strategy tests whether the model can generalize forward in time within the same day pattern.
+
+Primary validation metric:
+- RMSE
+
+Secondary metrics:
+- MAE
+- R2
+
+
+Models Tried
+Multiple models were trained and tuned with Optuna:
+
+1. LightGBM Regressor
+2. XGBoost Regressor
+3. HistGradientBoosting Regressor
+4. ExtraTrees Regressor
+5. RandomForest Regressor
+6. Ridge Regression
+7. Optuna weighted blend of all models
+
+
+Hyperparameter Optimization
+Optuna was used for automated hyperparameter tuning.
+
+The search optimized validation RMSE. Different hyperparameter spaces were used for each model.
+
+Examples of tuned parameters:
+
+LightGBM:
+- n_estimators
+- learning_rate
+- num_leaves
+- max_depth
+- min_child_samples
+- subsample
+- colsample_bytree
+- reg_alpha
+- reg_lambda
+
+XGBoost:
+- n_estimators
+- learning_rate
+- max_depth
+- min_child_weight
+- subsample
+- colsample_bytree
+- reg_alpha
+- reg_lambda
+
+Tree models:
+- n_estimators
+- max_depth
+- min_samples_leaf
+- min_samples_split
+- max_features
+
+Ridge:
+- alpha
+- fit_intercept
+
+
+Validation Results
+The best validation result came from the Optuna weighted blend.
+
+Validation leaderboard:
+
+1. Optuna weighted blend
+   RMSE: 0.035319
+   MAE: 0.023369
+   R2: 0.939642
+
+2. XGBoost
+   RMSE: 0.036184
+   MAE: 0.023969
+   R2: 0.936652
+
+3. LightGBM
+   RMSE: 0.036251
+   MAE: 0.023456
+   R2: 0.936417
+
+4. ExtraTrees
+   RMSE: 0.038303
+   MAE: 0.024516
+   R2: 0.929014
+
+5. HistGradientBoosting
+   RMSE: 0.038931
+   MAE: 0.024288
+   R2: 0.926665
+
+6. RandomForest
+   RMSE: 0.039089
+   MAE: 0.024238
+   R2: 0.926070
+
+7. Ridge Regression
+   RMSE: 0.042913
+   MAE: 0.029738
+   R2: 0.910899
+
+
+Best Model
+The final selected model was the Optuna weighted blend.
+
+Blend weights:
+
+- XGBoost: 0.479917802940494
+- LightGBM: 0.3915560653820017
+- Ridge: 0.09110086638307278
+- HistGradientBoosting: 0.01678923742193132
+- ExtraTrees: 0.011048994635008837
+- RandomForest: 0.00958703323749122
+
+The blend was selected because it achieved the best validation RMSE and combined the strengths of boosted trees, random forests, and a linear baseline.
+
+
+Tools and Libraries Used
+The solution was implemented in Python.
+
+Main tools and libraries:
+
+- pandas: data loading, cleaning, transformation, submission formatting
+- numpy: numerical operations and feature calculations
+- scikit-learn: regression models, validation metrics, model utilities
+- Optuna: hyperparameter optimization and blend weight optimization
+- LightGBM: gradient boosting model
+- XGBoost: gradient boosting model
+- joblib: saving trained model artifacts
+- Jupyter Notebook: final source code format for submission
+
+
+Final Submission File
+The final prediction file is:
+
+predictions.csv
+
+It follows the sample submission format exactly:
+
+Index,demand
+
+Validation checks performed:
+
+- Columns match sample_submission.csv
+- Row count matches test.csv
+- Index order matches test.csv
+- No missing demand values
+- Demand values are clipped to [0, 1]
+
+
+Final Notes
+The final notebook and prediction file are prepared for submission.
+
+Notebook:
+GridLock_train_only_submission.ipynb
+
+Prediction file:
+predictions.csv
+
+The modeling approach focused on strong feature engineering, train-only validation, Optuna tuning, and model blending to maximize validation accuracy while keeping the final submission format correct.
